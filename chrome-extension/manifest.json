@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Polymarket Favorites",
+  "version": "1.0.4",
+  "description": "The missing Favorites feature for Polymarket. Track markets and traders with custom notes, tags, filters and sorting.",
+  "author": "Polymarket Toolbox",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://polymarket.com/*",
+    "https://*.polymarket.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://polymarket.com/*",
+        "https://*.polymarket.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

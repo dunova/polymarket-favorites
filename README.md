@@ -1,6 +1,6 @@
 # Polymarket Favorites Assistant (Polymarket 收藏助手)
 
-![Version](https://img.shields.io/badge/version-1.0.3-blue)
+![Version](https://img.shields.io/badge/version-1.0.4-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 [English](#english) | [中文](#中文)

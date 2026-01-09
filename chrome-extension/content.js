@@ -1,22 +1,41 @@
-// ==UserScript==
-// @name         Polymarket Favorites Assistant
-// @namespace    https://polymarket.com/
-// @version      1.0.4
-// @description  收藏市场和交易者，支持备注、标签、筛选和排序 | Track markets and traders with notes, tags, filters and sorting
-// @author       Polymarket Toolbox
-// @match        https://polymarket.com/*
-// @match        https://*.polymarket.com/*
-// @grant        GM_setValue
-// @grant        GM_getValue
-// @icon         https://polymarket.com/favicon.ico
-// @run-at       document-idle
-// ==/UserScript==
+// Polymarket Favorites Assistant (Chrome Extension)
+// Version 1.0.4
 
 (function () {
     'use strict';
 
-    // ==================== LANGUAGE SYSTEM ====================
-    let currentLang = GM_getValue('pm_lang', 'zh'); // Default: 中文
+    // State
+    let favoriteMarkets = [];
+    let favoriteTraders = [];
+    let currentLang = 'zh'; // Default
+    let savedPanelWidth = 400;
+    let savedPanelHeight = 600;
+
+    // Initialize async
+    chrome.storage.local.get(['pm_fav_markets', 'pm_fav_traders', 'pm_lang', 'pm_panel_width', 'pm_panel_height'], (result) => {
+        favoriteMarkets = result.pm_fav_markets || [];
+        favoriteTraders = result.pm_fav_traders || [];
+        if (result.pm_lang) currentLang = result.pm_lang;
+        savedPanelWidth = result.pm_panel_width || 400;
+        savedPanelHeight = result.pm_panel_height || (window.innerHeight - 120);
+
+        // Migration logic
+        favoriteMarkets.forEach(m => {
+            if (!m.tags) m.tags = [];
+            if (m.customName === undefined) m.customName = '';
+        });
+        favoriteTraders.forEach(t => {
+            if (!t.tags) t.tags = [];
+            if (t.customName === undefined) t.customName = '';
+        });
+
+        // Start only when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
+    });
 
     const i18n = {
         zh: {
@@ -99,7 +118,7 @@
 
     function toggleLang() {
         currentLang = currentLang === 'zh' ? 'en' : 'zh';
-        GM_setValue('pm_lang', currentLang);
+        chrome.storage.local.set({ pm_lang: currentLang });
         updateLanguage();
     }
 
@@ -809,36 +828,12 @@
     styleEl.textContent = styles;
     document.head.appendChild(styleEl);
 
-    // ==================== DATA ====================
-    let favoriteMarkets = JSON.parse(GM_getValue('pm_fav_markets', '[]'));
-    let favoriteTraders = JSON.parse(GM_getValue('pm_fav_traders', '[]'));
-
-    // Migration: Ensure all items have required fields
-    favoriteMarkets.forEach(m => {
-        if (!m.tags) m.tags = [];
-        if (m.customName === undefined) m.customName = '';
-    });
-    favoriteTraders.forEach(t => {
-        if (!t.tags) t.tags = [];
-        if (t.customName === undefined) t.customName = '';
-    });
-
-    // Save after migration
-    saveMarkets();
-    saveTraders();
-
-    // State
-    let editingItem = null;
-    let activeTab = 'markets';
-    let activeFilterTag = null;
-    let activeSort = 'newest';
-
     function saveMarkets() {
-        GM_setValue('pm_fav_markets', JSON.stringify(favoriteMarkets));
+        chrome.storage.local.set({ pm_fav_markets: favoriteMarkets });
     }
 
     function saveTraders() {
-        GM_setValue('pm_fav_traders', JSON.stringify(favoriteTraders));
+        chrome.storage.local.set({ pm_fav_traders: favoriteTraders });
     }
 
     // ==================== EXPORT/IMPORT ====================
@@ -1176,14 +1171,14 @@
                         const newWidth = startWidth + (startX - moveEvent.clientX);
                         if (newWidth >= 300) { // Min width constraint
                             panel.style.width = newWidth + 'px';
-                            GM_setValue('pm_panel_width', newWidth);
+                            chrome.storage.local.set({ pm_panel_width: newWidth });
                         }
                     }
                     if (direction.includes('s')) {
                         const newHeight = startHeight + (moveEvent.clientY - startY);
                         if (newHeight >= 400) { // Min height constraint
                             panel.style.height = newHeight + 'px';
-                            GM_setValue('pm_panel_height', newHeight);
+                            chrome.storage.local.set({ pm_panel_height: newHeight });
                         }
                     }
                 };
@@ -1201,12 +1196,9 @@
             resizeS.addEventListener('mousedown', initResize);
             resizeSW.addEventListener('mousedown', initResize);
 
-            // Restore saved size
-            const savedWidth = GM_getValue('pm_panel_width', 400);
-            const savedHeight = GM_getValue('pm_panel_height', window.innerHeight - 120);
-
-            panel.style.width = savedWidth + 'px';
-            panel.style.height = savedHeight + 'px';
+            // Restore saved size (from init)
+            panel.style.width = savedPanelWidth + 'px';
+            panel.style.height = savedPanelHeight + 'px';
             searchInput.oninput = (e) => {
                 searchQuery = e.target.value.toLowerCase();
                 renderAll();
@@ -1357,11 +1349,11 @@
 
         console.log('[PM] Saved:', item.customName, item.tags);
 
-        // Save to GM storage
+        // Save to STORAGE
         if (type === 'market') {
-            GM_setValue('pm_fav_markets', JSON.stringify(favoriteMarkets));
+            saveMarkets();
         } else {
-            GM_setValue('pm_fav_traders', JSON.stringify(favoriteTraders));
+            saveTraders();
         }
 
         return true;
