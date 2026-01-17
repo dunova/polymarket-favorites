@@ -35,7 +35,8 @@ Polymarket Favorites adds a powerful **favorites sidebar** to Polymarket.com. Sa
 - 🏷️ **Colorful Tags**: Organize with auto-colored tags for better categorization.
 - ✏️ **Custom Notes**: Add personal notes and rename items for better organization.
 - ↔️↕️ **Resizable UI**: Drag edges to adjust width/height to your preference.
-- 📤 **Export/Import**: Backup and restore your data as JSON.
+- 📤 **Export/Import**: Backup and restore your data as JSON. 
+- 🤝 **Share & Merge**: Share your trader lists with friends! Imports **safely merge** without overwriting your existing notes.
 - 🔒 **100% Local**: All data stays on your device, zero network requests.
 
 ---
@@ -86,6 +87,7 @@ Polymarket Favorites 为 Polymarket.com 添加了一个强大的**收藏侧边�
 - ✏️ **自定义备注** - 支持重命名和添加私人备注。
 - ↔️↕️ **界面可调** - 随心所欲拉伸面板宽度和高度。
 - 📤 **导出/导入** - 轻松备份和恢复您的数据。
+- 🤝 **分享与融合** - 分享你的交易员名单！导入时**安全融合**，只会新增你没有的，绝不覆盖你的已有备注。
 - 🔒 **100% 本地** - 数据仅存储在本地，绝不联网。
 
 ---
