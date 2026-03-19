@@ -1,0 +1,85 @@
+<svg width="1600" height="920" viewBox="0 0 1600 920" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="170" y1="60" x2="1420" y2="860" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#07111F"/>
+      <stop offset="0.52" stop-color="#0C1726"/>
+      <stop offset="1" stop-color="#121826"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="1090" y1="162" x2="1386" y2="604" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2E7AFB"/>
+      <stop offset="1" stop-color="#1FCB96"/>
+    </linearGradient>
+    <linearGradient id="pill" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#16304E"/>
+      <stop offset="1" stop-color="#0E2238"/>
+    </linearGradient>
+    <filter id="blur" x="820" y="80" width="640" height="640" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="52"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="920" rx="36" fill="url(#bg)"/>
+  <g opacity="0.9" filter="url(#blur)">
+    <circle cx="1140" cy="260" r="180" fill="#154D9A"/>
+    <circle cx="1220" cy="340" r="140" fill="#18A17A"/>
+  </g>
+
+  <rect x="72" y="68" width="1456" height="784" rx="28" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.08)"/>
+
+  <g transform="translate(122 132)">
+    <rect x="0" y="0" width="126" height="126" rx="31" fill="url(#accent)"/>
+    <path d="M62.2 27L74.5 56.5L106.4 59.2L82.1 80.1L89.6 111.4L62.2 94.7L34.7 111.4L42.2 80.1L17.9 59.2L49.8 56.5L62.2 27Z" fill="#F8FBFF"/>
+  </g>
+
+  <text x="290" y="180" fill="#F5F7FB" font-size="68" font-weight="700" font-family="Avenir Next, SF Pro Display, Segoe UI, sans-serif">Polymarket Favorites</text>
+  <text x="292" y="236" fill="#91A4BC" font-size="28" font-weight="500" font-family="Avenir Next, SF Pro Display, Segoe UI, sans-serif">A polished in-page watchlist for Polymarket markets, traders, tags and notes</text>
+
+  <g transform="translate(292 292)">
+    <rect width="196" height="44" rx="22" fill="url(#pill)" stroke="rgba(255,255,255,0.08)"/>
+    <text x="28" y="29" fill="#CFE0F4" font-size="21" font-weight="600" font-family="Avenir Next, SF Pro Display, Segoe UI, sans-serif">Markets + Traders</text>
+  </g>
+  <g transform="translate(500 292)">
+    <rect width="138" height="44" rx="22" fill="url(#pill)" stroke="rgba(255,255,255,0.08)"/>
+    <text x="28" y="29" fill="#CFE0F4" font-size="21" font-weight="600" font-family="Avenir Next, SF Pro Display, Segoe UI, sans-serif">Local-only</text>
+  </g>
+  <g transform="translate(652 292)">
+    <rect width="176" height="44" rx="22" fill="url(#pill)" stroke="rgba(255,255,255,0.08)"/>
+    <text x="28" y="29" fill="#CFE0F4" font-size="21" font-weight="600" font-family="Avenir Next, SF Pro Display, Segoe UI, sans-serif">Tags + Notes</text>
+  </g>
+
+  <g transform="translate(292 392)">
+    <text fill="#EFF5FB" font-size="34" font-weight="650" font-family="Avenir Next, SF Pro Display, Segoe UI, sans-serif">Version 1.2.0 focuses on product feel</text>
+    <text x="0" y="66" fill="#8CA1BA" font-size="26" font-weight="500" font-family="Avenir Next, SF Pro Display, Segoe UI, sans-serif">1. A denser sidebar that feels closer to a trading watchlist</text>
+    <text x="0" y="112" fill="#8CA1BA" font-size="26" font-weight="500" font-family="Avenir Next, SF Pro Display, Segoe UI, sans-serif">2. Safer rendering and steadier local persistence during fast actions</text>
+    <text x="0" y="158" fill="#8CA1BA" font-size="26" font-weight="500" font-family="Avenir Next, SF Pro Display, Segoe UI, sans-serif">3. A cleaner GitHub presentation with aligned docs and assets</text>
+  </g>
+
+  <g transform="translate(968 172)">
+    <rect width="440" height="520" rx="26" fill="rgba(7,15,24,0.88)" stroke="rgba(255,255,255,0.1)"/>
+    <rect x="24" y="24" width="392" height="64" rx="18" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.06)"/>
+    <circle cx="56" cy="56" r="18" fill="#2E7AFB"/>
+    <text x="88" y="63" fill="#F4F7FC" font-size="26" font-weight="650" font-family="Avenir Next, SF Pro Display, Segoe UI, sans-serif">Favorites Drawer</text>
+
+    <rect x="24" y="112" width="392" height="52" rx="16" fill="rgba(255,255,255,0.04)"/>
+    <rect x="40" y="128" width="108" height="20" rx="10" fill="#2D4157"/>
+    <rect x="160" y="128" width="78" height="20" rx="10" fill="#1A8B69"/>
+    <rect x="250" y="128" width="92" height="20" rx="10" fill="#384A61"/>
+
+    <rect x="24" y="190" width="392" height="110" rx="18" fill="rgba(255,255,255,0.04)"/>
+    <rect x="42" y="208" width="56" height="56" rx="18" fill="url(#accent)"/>
+    <rect x="116" y="214" width="224" height="18" rx="9" fill="#EBF2FB"/>
+    <rect x="116" y="242" width="142" height="14" rx="7" fill="#7B8FA7"/>
+    <rect x="116" y="268" width="78" height="14" rx="7" fill="#1FCB96"/>
+    <rect x="204" y="268" width="78" height="14" rx="7" fill="#F46868"/>
+
+    <rect x="24" y="320" width="392" height="110" rx="18" fill="rgba(255,255,255,0.04)"/>
+    <rect x="42" y="338" width="56" height="56" rx="18" fill="#293D54"/>
+    <rect x="116" y="344" width="198" height="18" rx="9" fill="#EBF2FB"/>
+    <rect x="116" y="372" width="118" height="14" rx="7" fill="#7B8FA7"/>
+    <rect x="116" y="398" width="70" height="14" rx="7" fill="#2E7AFB"/>
+    <rect x="196" y="398" width="98" height="14" rx="7" fill="#B05CF2"/>
+
+    <rect x="24" y="450" width="392" height="46" rx="16" fill="rgba(46,122,251,0.14)" stroke="rgba(46,122,251,0.28)"/>
+    <text x="44" y="480" fill="#DCE9FF" font-size="22" font-weight="600" font-family="Avenir Next, SF Pro Display, Segoe UI, sans-serif">Local-only · Search &amp; Tags · Import / Export</text>
+  </g>
+</svg>

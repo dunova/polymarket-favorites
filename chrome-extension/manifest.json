@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Polymarket Favorites",
-  "version": "1.0.6",
-  "description": "The missing Favorites feature for Polymarket. Track markets and traders with custom notes, tags, filters and sorting.",
+  "version": "1.2.0",
+  "description": "In-page favorites sidebar for Polymarket. Save markets and traders with notes, tags, search, and local-only storage.",
   "author": "Polymarket Toolbox",
   "icons": {
     "16": "icons/icon16.png",

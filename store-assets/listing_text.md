@@ -1,19 +1,30 @@
 # Chrome Web Store Listing
 
 **Name**: Polymarket Favorites
-**Summary**: The missing "Favorites" feature for Polymarket. Track markets and traders with custom notes, tags, and filters.
+
+**Summary**: Save Polymarket markets and traders inside the page with a polished sidebar, notes, tags, search, and local-only storage.
 
 **Description**:
-Polymarket Favorites is the essential companion for every Polymarket user. It adds a seamless "Favorites" system directly into the Polymarket interface, allowing you to track markets and traders without relying on browser bookmarks.
 
-🚀 **Key Features**:
+Polymarket Favorites adds a polished in-page sidebar to Polymarket so you can save markets and trader profiles without relying on browser bookmarks.
 
-- **One-Click Favorites**: Add any market or trader profile to your watchlist instantly.
-- **Floating Panel**: Access your favorites anywhere with a sleek, collapsible floating panel.
-- **Custom Notes & Tags**: Add personal notes and colorful tags (e.g., "Whale", "High Risk", "Politics") to organize your tracking.
-- **Advanced Filtering**: Filter your favorites by tags or search by name.
-- **Privacy First**: All data is stored locally in your browser. No external servers, no tracking.
-- **Export/Import**: easy backup and migration of your data.
+### What it does
 
-**Version**: 1.0.3
-**Privacy Policy**: This extension does not collect any user data. All preferences are stored locally using Chrome Storage.
+- Favorite markets and trader pages from the current Polymarket view
+- Add custom names and tags to keep your watchlist clean
+- Search, filter, and sort saved items
+- Use a cleaner, denser sidebar that feels closer to a trading watchlist
+- Resize the floating panel to match your workflow
+- Export and import local JSON backups
+- Keep all saved data inside your browser
+
+### Privacy
+
+- Uses local browser storage only
+- Does not upload your notes or tags
+- Does not require an external account or backend
+
+### Notes for listing
+
+- Position this as an in-page favorites sidebar, not a separate dashboard
+- Keep screenshots aligned with the sidebar experience

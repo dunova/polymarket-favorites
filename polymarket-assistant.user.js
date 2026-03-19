@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Polymarket Favorites Assistant
 // @namespace    https://polymarket.com/
-// @version      1.0.6
+// @version      1.2.0
 // @description  收藏市场和交易者，支持备注、标签、筛选和排序 | Track markets and traders with notes, tags, filters and sorting
 // @author       Polymarket Toolbox
 // @match        https://polymarket.com/*
@@ -15,8 +15,43 @@
 (function () {
     'use strict';
 
-    // ==================== LANGUAGE SYSTEM ====================
-    let currentLang = GM_getValue('pm_lang', 'zh'); // Default: 中文
+    // State
+    let favoriteMarkets = [];
+    let favoriteTraders = [];
+    let currentLang = GM_getValue('pm_lang', 'zh');
+    let savedPanelWidth = GM_getValue('pm_panel_width', 400);
+    let savedPanelHeight = GM_getValue('pm_panel_height', window.innerHeight - 120);
+    let savedPanelTop = GM_getValue('pm_panel_top', 70);
+    let storageReady = true;
+    let hasInitialized = false;
+    let currentPageContext = null;
+    let pageContextTimer = null;
+    let activeTab = 'markets';
+    let activeSort = 'newest';
+    let activeFilterTag = null;
+    let renderFrame = null;
+    let lastRenderSignature = '';
+    let saveMarketTimer = null;
+    let saveTraderTimer = null;
+    let toastTimer = null;
+
+    try {
+        favoriteMarkets = JSON.parse(GM_getValue('pm_fav_markets', '[]'));
+        favoriteTraders = JSON.parse(GM_getValue('pm_fav_traders', '[]'));
+    } catch (error) {
+        console.error('[PM] Failed to parse userscript storage:', error);
+        favoriteMarkets = [];
+        favoriteTraders = [];
+    }
+
+    favoriteMarkets.forEach(m => {
+        if (!m.tags) m.tags = [];
+        if (m.customName === undefined) m.customName = '';
+    });
+    favoriteTraders.forEach(t => {
+        if (!t.tags) t.tags = [];
+        if (t.customName === undefined) t.customName = '';
+    });
 
     const i18n = {
         zh: {
@@ -53,7 +88,16 @@
             exportSuccess: '数据已导出',
             importSuccess: '数据导入成功',
             importError: '导入失败：文件格式错误',
-            confirmImport: '确定要导入数据吗？这将与现有数据合并。'
+            confirmImport: '确定要导入数据吗？这将与现有数据合并。',
+            noMarketsHint: '去任意市场详情页，点一下右下角收藏按钮。',
+            noTradersHint: '去交易员主页点收藏，方便建立观察名单。',
+            noSearchResults: '没有匹配的结果',
+            clearFilters: '清空筛选',
+            savedItems: '已收藏',
+            syncedLocally: '本地保存',
+            panelSubtitle: 'Markets & Traders',
+            recentSaved: '最近收藏',
+            panelReady: '收藏面板已就绪'
         },
         en: {
             favorites: 'Favorites',
@@ -89,12 +133,105 @@
             exportSuccess: 'Data exported',
             importSuccess: 'Data imported successfully',
             importError: 'Import failed: invalid file format',
-            confirmImport: 'Import data? This will merge with existing data.'
+            confirmImport: 'Import data? This will merge with existing data.',
+            noMarketsHint: 'Open any market page and use the floating favorite button.',
+            noTradersHint: 'Favorite trader profiles to build your watchlist.',
+            noSearchResults: 'No matching results',
+            clearFilters: 'Clear filters',
+            savedItems: 'Saved',
+            syncedLocally: 'Stored locally',
+            panelSubtitle: 'Markets & Traders',
+            recentSaved: 'Recently saved',
+            panelReady: 'Favorites panel is ready'
         }
     };
 
     function t(key) {
         return i18n[currentLang][key] || key;
+    }
+
+    function queueInit() {
+        if (hasInitialized || !storageReady) return;
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', queueInit, { once: true });
+            return;
+        }
+
+        hasInitialized = true;
+        init();
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function escapeAttr(value) {
+        return escapeHtml(value).replace(/`/g, '&#96;');
+    }
+
+    function debounce(fn, delay) {
+        let timer = null;
+        return (...args) => {
+            clearTimeout(timer);
+            timer = setTimeout(() => fn(...args), delay);
+        };
+    }
+
+    function clamp(value, min, max) {
+        return Math.min(Math.max(value, min), max);
+    }
+
+    function scheduleRender(force = false) {
+        const signature = JSON.stringify({
+            activeTab,
+            activeSort,
+            activeFilterTag,
+            marketCount: favoriteMarkets.length,
+            traderCount: favoriteTraders.length,
+            searchQuery: window.pmSearchQuery || '',
+            lang: currentLang,
+            editing: currentlyEditing ? `${currentlyEditing.type}:${currentlyEditing.idx}` : ''
+        });
+
+        if (!force && signature === lastRenderSignature) return;
+        lastRenderSignature = signature;
+
+        if (renderFrame) cancelAnimationFrame(renderFrame);
+        renderFrame = requestAnimationFrame(() => {
+            renderFrame = null;
+            try {
+                renderAll();
+            } catch (error) {
+                console.error('[PM] Render error:', error);
+            }
+        });
+    }
+
+    function persistPanelBounds(panel) {
+        if (!panel) return;
+        const maxWidth = Math.max(320, window.innerWidth - 24);
+        const maxHeight = Math.max(240, window.innerHeight - 24);
+        const width = clamp(panel.offsetWidth || savedPanelWidth, 320, maxWidth);
+        const height = clamp(panel.offsetHeight || savedPanelHeight, 240, maxHeight);
+        const top = clamp(panel.offsetTop || savedPanelTop || 12, 12, Math.max(12, window.innerHeight - height - 12));
+
+        savedPanelWidth = width;
+        savedPanelHeight = height;
+        savedPanelTop = top;
+
+        panel.style.width = `${width}px`;
+        panel.style.height = `${height}px`;
+        panel.style.top = `${top}px`;
+        panel.style.right = `${Math.max(12, Math.min(30, window.innerWidth - width - 12))}px`;
+
+        GM_setValue('pm_panel_width', width);
+        GM_setValue('pm_panel_height', height);
+        GM_setValue('pm_panel_top', top);
     }
 
     function toggleLang() {
@@ -107,6 +244,8 @@
         // Update panel if it exists
         const panelTitle = document.querySelector('.pm-panel-title span');
         if (panelTitle) panelTitle.textContent = t('favorites');
+        const panelSubtitle = document.querySelector('.pm-panel-title-copy small');
+        if (panelSubtitle) panelSubtitle.textContent = t('panelSubtitle');
 
         // Update tabs
         const marketTab = document.querySelector('[data-tab="markets"]');
@@ -136,6 +275,11 @@
         const langBtn = document.getElementById('pm-lang-switch');
         if (langBtn) langBtn.textContent = currentLang === 'zh' ? 'EN' : '中';
 
+        const summaryLabels = document.querySelectorAll('.pm-summary-card span');
+        if (summaryLabels[0]) summaryLabels[0].textContent = t('markets');
+        if (summaryLabels[1]) summaryLabels[1].textContent = t('traders');
+        if (summaryLabels[2]) summaryLabels[2].textContent = t('recentSaved');
+
         // Update modal
         const modalTitle = document.querySelector('.pm-modal-title');
         if (modalTitle) modalTitle.textContent = t('editDetails');
@@ -160,22 +304,29 @@
         if (saveBtn) saveBtn.textContent = t('save');
 
         // Re-render lists
-        renderAll();
+        scheduleRender(true);
     }
 
     // ==================== PREMIUM STYLES ====================
     const styles = `
         :root {
-            --pm-bg-glass: rgba(22, 27, 34, 0.95);
-            --pm-border: #30363d;
-            --pm-hover: #21262d;
-            --pm-text-primary: #e6edf3;
-            --pm-text-secondary: #8b949e;
-            --pm-accent: #2e7afb;
-            --pm-accent-hover: #1a62d8;
-            --pm-success: #3fb950;
-            --pm-danger: #f85149;
-            --pm-warning: #d29922;
+            --pm-bg-glass: rgba(16, 20, 27, 0.96);
+            --pm-bg-elevated: rgba(22, 28, 36, 0.92);
+            --pm-bg-soft: rgba(255, 255, 255, 0.04);
+            --pm-border: rgba(255, 255, 255, 0.09);
+            --pm-border-strong: rgba(255, 255, 255, 0.16);
+            --pm-hover: rgba(255, 255, 255, 0.06);
+            --pm-text-primary: #f3f7fb;
+            --pm-text-secondary: #96a2b4;
+            --pm-text-tertiary: #627086;
+            --pm-accent: #4ea1ff;
+            --pm-accent-hover: #2d8fff;
+            --pm-accent-soft: rgba(78, 161, 255, 0.16);
+            --pm-success: #4bd08b;
+            --pm-danger: #ff6b6b;
+            --pm-warning: #f2b94b;
+            --pm-shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.48);
+            --pm-shadow-md: 0 14px 32px rgba(0, 0, 0, 0.24);
         }
 
         #pm-assistant-toolbar {
@@ -185,8 +336,9 @@
             display: flex;
             gap: 12px;
             z-index: 2147483647;
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-family: "Avenir Next", "Segoe UI", sans-serif;
             pointer-events: none;
+            align-items: center;
         }
 
         #pm-assistant-toolbar > * {
@@ -198,47 +350,52 @@
             align-items: center;
             justify-content: center;
             gap: 8px;
-            height: 44px;
+            height: 48px;
             padding: 0 16px;
-            border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 22px;
+            border: 1px solid var(--pm-border);
+            border-radius: 18px;
             font-size: 14px;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
-            backdrop-filter: blur(8px);
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+            transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.25s, border-color 0.25s, background 0.25s;
+            backdrop-filter: blur(18px) saturate(130%);
+            box-shadow: var(--pm-shadow-md);
             color: white;
             position: relative;
             overflow: hidden;
         }
 
         .pm-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+            transform: translateY(-2px) scale(1.01);
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.34);
         }
         
         .pm-btn:active { transform: scale(0.96); }
 
         .pm-btn-panel {
-            background: var(--pm-bg-glass);
-            border-color: var(--pm-border);
-            width: 44px;
+            background:
+                radial-gradient(circle at 30% 20%, rgba(78, 161, 255, 0.24), transparent 42%),
+                linear-gradient(180deg, rgba(24, 32, 43, 0.96), rgba(13, 17, 23, 0.98));
+            width: 48px;
             padding: 0;
         }
 
         .pm-btn-panel:hover {
-            border-color: var(--pm-text-secondary);
-            background: #2d333b;
+            border-color: var(--pm-border-strong);
         }
 
         .pm-btn-action {
-            background: var(--pm-bg-glass);
+            background:
+                linear-gradient(180deg, rgba(28, 36, 48, 0.94), rgba(17, 22, 30, 0.98));
+            min-width: 108px;
         }
 
         .pm-btn-action.favorited {
-            background: var(--pm-accent);
-            border-color: transparent;
+            background:
+                linear-gradient(180deg, rgba(78, 161, 255, 0.96), rgba(45, 143, 255, 0.94));
+            border-color: rgba(255, 255, 255, 0.24);
+            color: #08111d;
+            box-shadow: 0 18px 40px rgba(45, 143, 255, 0.38);
         }
 
         .pm-btn svg { width: 20px; height: 20px; }
@@ -246,28 +403,29 @@
         /* Modern Toast */
         #pm-toast {
             position: fixed;
-            bottom: 90px;
+            bottom: 96px;
             right: 30px;
-            padding: 12px 24px;
-            background: rgba(22, 27, 34, 0.95);
+            padding: 13px 18px;
+            background: rgba(14, 18, 25, 0.96);
             color: white;
             border: 1px solid var(--pm-border);
-            border-left: 4px solid var(--pm-accent);
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 500;
+            border-left: 3px solid var(--pm-accent);
+            border-radius: 14px;
+            font-size: 13px;
+            font-weight: 600;
             z-index: 2147483647;
             opacity: 0;
-            transform: translateX(20px) scale(0.95);
+            transform: translateY(8px) scale(0.97);
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
-            backdrop-filter: blur(10px);
-            font-family: 'Inter', sans-serif;
+            box-shadow: var(--pm-shadow-md);
+            backdrop-filter: blur(16px);
+            font-family: "Avenir Next", "Segoe UI", sans-serif;
+            letter-spacing: 0.01em;
         }
 
         #pm-toast.show {
             opacity: 1;
-            transform: translateX(0) scale(1);
+            transform: translateY(0) scale(1);
         }
 
         /* Premium Panel */
@@ -279,19 +437,19 @@
             height: calc(100vh - 120px);
             max-height: 800px;
             background: var(--pm-bg-glass);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 16px;
+            border: 1px solid var(--pm-border);
+            border-radius: 28px;
             z-index: 2147483646;
             display: flex;
             flex-direction: column;
             overflow: hidden;
-            box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
-            font-family: 'Inter', -apple-system, sans-serif;
-            backdrop-filter: blur(20px);
+            box-shadow: var(--pm-shadow-lg);
+            font-family: "Avenir Next", "Segoe UI", sans-serif;
+            backdrop-filter: blur(26px) saturate(125%);
             opacity: 0;
-            transform: translateX(20px);
+            transform: translateY(14px) scale(0.985);
             pointer-events: none;
-            transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: opacity 0.28s cubic-bezier(0.4, 0, 0.2, 1), transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
             /* Defaults, will be overridden by JS if resized */
             min-width: 300px;
             min-height: 150px;
@@ -328,7 +486,7 @@
 
         #pm-panel.show { 
             opacity: 1; 
-            transform: translateX(0);
+            transform: translateY(0) scale(1);
             pointer-events: auto;
         }
 
@@ -337,13 +495,15 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 16px 20px;
-            border-bottom: 1px solid var(--pm-border);
-            background: rgba(13, 17, 23, 0.8);
+            padding: 18px 22px 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            background:
+                radial-gradient(circle at top left, rgba(78, 161, 255, 0.18), transparent 35%),
+                linear-gradient(180deg, rgba(14, 18, 25, 0.98), rgba(14, 18, 25, 0.86));
         }
 
         .pm-panel-title {
-            font-size: 15px;
+            font-size: 16px;
             font-weight: 700;
             color: var(--pm-text-primary);
             display: flex;
@@ -351,33 +511,84 @@
             gap: 10px;
             letter-spacing: -0.01em;
         }
+
+        .pm-panel-title-copy {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .pm-panel-title-copy small {
+            color: var(--pm-text-secondary);
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
         
         .pm-logo-icon {
-            width: 28px;
-            height: 28px;
-            background: transparent;
+            width: 42px;
+            height: 42px;
+            background: linear-gradient(135deg, rgba(78, 161, 255, 0.18), rgba(255, 255, 255, 0.04));
             display: flex;
             align-items: center;
             justify-content: center;
+            border-radius: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
         }
         
         .pm-logo-icon svg {
-            width: 24px;
-            height: 24px;
+            width: 22px;
+            height: 22px;
         }
         
         .pm-header-actions {
             display: flex;
-            gap: 8px;
+            gap: 10px;
             align-items: center;
+        }
+
+        .pm-panel-summary {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+            padding: 0 20px;
+            margin-top: 14px;
+        }
+
+        .pm-summary-card {
+            position: relative;
+            padding: 12px 14px;
+            border-radius: 18px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.018));
+            overflow: hidden;
+        }
+
+        .pm-summary-card strong {
+            display: block;
+            font-size: 22px;
+            color: var(--pm-text-primary);
+            letter-spacing: -0.03em;
+            margin-bottom: 4px;
+        }
+
+        .pm-summary-card span {
+            display: block;
+            color: var(--pm-text-secondary);
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
         }
         
         .pm-header-btn {
-            background: transparent;
+            background: rgba(255,255,255,0.02);
             border: 1px solid var(--pm-border);
             color: var(--pm-text-secondary);
-            padding: 6px;
-            border-radius: 6px;
+            width: 42px;
+            height: 42px;
+            border-radius: 14px;
             cursor: pointer;
             transition: all 0.2s;
             display: flex;
@@ -386,30 +597,35 @@
         }
         
         .pm-header-btn:hover {
-            border-color: var(--pm-accent);
-            color: var(--pm-accent);
+            border-color: rgba(78, 161, 255, 0.34);
+            color: var(--pm-text-primary);
+            background: rgba(78, 161, 255, 0.12);
         }
         
         .pm-lang-switch {
-            background: transparent;
+            background: rgba(255,255,255,0.02);
             border: 1px solid var(--pm-border);
             color: var(--pm-text-secondary);
-            padding: 4px 10px;
-            border-radius: 6px;
-            font-size: 11px;
+            min-width: 54px;
+            height: 42px;
+            padding: 0 12px;
+            border-radius: 14px;
+            font-size: 12px;
             cursor: pointer;
             transition: all 0.2s;
-            font-weight: 600;
+            font-weight: 700;
+            letter-spacing: 0.04em;
         }
         
         .pm-lang-switch:hover {
-            border-color: var(--pm-accent);
-            color: var(--pm-accent);
+            border-color: rgba(78, 161, 255, 0.34);
+            color: var(--pm-text-primary);
+            background: rgba(78, 161, 255, 0.12);
         }
 
         .pm-panel-close {
-            width: 32px;
-            height: 32px;
+            width: 42px;
+            height: 42px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -417,28 +633,28 @@
             border: none;
             color: var(--pm-text-secondary);
             cursor: pointer;
-            border-radius: 8px;
+            border-radius: 14px;
             transition: all 0.2s;
         }
 
-        .pm-panel-close:hover { background: rgba(255,255,255,0.1); color: white; }
+        .pm-panel-close:hover { background: rgba(255,255,255,0.08); color: white; }
 
         /* Tabs */
         .pm-panel-tabs {
             display: flex;
-            background: rgba(13, 17, 23, 0.5);
-            padding: 4px;
+            background: rgba(255,255,255,0.025);
+            padding: 5px;
             margin: 16px 20px 0;
-            border-radius: 8px;
+            border-radius: 18px;
             border: 1px solid var(--pm-border);
         }
 
         .pm-panel-tab {
             flex: 1;
-            padding: 8px 12px;
+            padding: 10px 12px;
             background: transparent;
             border: none;
-            border-radius: 6px;
+            border-radius: 14px;
             color: var(--pm-text-secondary);
             font-size: 13px;
             font-weight: 600;
@@ -452,45 +668,81 @@
 
         .pm-panel-tab:hover { color: var(--pm-text-primary); }
         .pm-panel-tab.active { 
-            background: var(--pm-hover); 
+            background: linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.04));
             color: var(--pm-text-primary);
-            box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
         }
 
         .pm-badge {
-            background: rgba(48, 54, 61, 0.8);
-            padding: 1px 6px;
-            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.08);
+            padding: 2px 7px;
+            border-radius: 999px;
             font-size: 11px;
             min-width: 18px;
             text-align: center;
         }
         
-        .pm-panel-tab.active .pm-badge { background: #000; }
+        .pm-panel-tab.active .pm-badge { background: rgba(4, 9, 15, 0.8); }
         
         /* Filters */
         .pm-panel-filters {
-            padding: 12px 20px;
+            padding: 14px 20px 12px;
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 12px;
+        }
+
+        .pm-search-shell {
+            position: relative;
+        }
+
+        .pm-search-shell svg {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 15px;
+            height: 15px;
+            color: var(--pm-text-tertiary);
+            pointer-events: none;
+        }
+
+        .pm-search-input {
+            width: 100%;
+            padding: 12px 14px 12px 40px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--pm-border);
+            border-radius: 16px;
+            color: var(--pm-text-primary);
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .pm-search-input:focus {
+            border-color: rgba(46, 122, 251, 0.65);
+            box-shadow: 0 0 0 3px rgba(46, 122, 251, 0.15);
         }
         
         .pm-sort-row {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 12px;
         }
         
         .pm-sort-select {
-            background: transparent;
-            border: none;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--pm-border);
             color: var(--pm-text-secondary);
             font-size: 12px;
-            font-weight: 500;
+            font-weight: 600;
             cursor: pointer;
             outline: none;
             text-align: right;
+            border-radius: 12px;
+            padding: 8px 10px;
+            min-width: 86px;
         }
         .pm-sort-select:hover { color: var(--pm-text-primary); }
         
@@ -498,57 +750,66 @@
             display: flex;
             flex-wrap: wrap;
             gap: 6px;
-            max-height: 54px;
+            max-height: 64px;
             overflow-y: auto;
+            align-items: center;
         }
         
         .pm-filter-tag {
             font-size: 11px;
-            padding: 4px 10px;
-            border-radius: 12px;
-            background: rgba(48, 54, 61, 0.5);
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.035);
             color: var(--pm-text-secondary);
             cursor: pointer;
             transition: all 0.2s;
-            border: 1px solid transparent;
+            border: 1px solid rgba(255,255,255,0.05);
+            white-space: nowrap;
         }
         
         .pm-filter-tag:hover { background: var(--pm-hover); color: var(--pm-text-primary); }
         .pm-filter-tag.active { 
             background: rgba(46, 122, 251, 0.15); 
             color: var(--pm-accent); 
-            border-color: rgba(46, 122, 25251, 0.3);
+            border-color: rgba(46, 122, 251, 0.3);
         }
 
         /* Content Area */
         .pm-panel-content {
             flex: 1;
             overflow-y: auto;
-            padding: 0 20px 20px;
+            padding: 0 20px 18px;
         }
 
-        .pm-tab-content { display: none; margin-top: 10px; animation: fadeIn 0.2s ease; }
+        .pm-tab-content { display: none; margin-top: 12px; animation: fadeIn 0.2s ease; }
         .pm-tab-content.active { display: block; }
         
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
         /* Modern Cards */
         .pm-card {
-            background: rgba(33, 38, 45, 0.6);
-            border: 1px solid rgba(255,255,255,0.05);
-            border-radius: 12px;
-            padding: 10px;
-            margin-bottom: 6px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.018));
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 20px;
+            padding: 12px;
+            margin-bottom: 10px;
             cursor: pointer;
             transition: all 0.2s;
             position: relative;
+            overflow: hidden;
         }
 
         .pm-card:hover { 
-            border-color: var(--pm-accent); 
-            background: rgba(33, 38, 45, 0.9);
+            border-color: rgba(78, 161, 255, 0.26); 
+            background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
             transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            box-shadow: 0 18px 32px rgba(0,0,0,0.18);
+        }
+
+        .pm-card:focus-within,
+        .pm-card:focus-visible {
+            border-color: var(--pm-accent);
+            box-shadow: 0 0 0 2px rgba(46, 122, 251, 0.18);
         }
 
         .pm-card-inner {
@@ -557,10 +818,10 @@
         }
 
         .pm-card-icon {
-            width: 36px;
-            height: 36px;
-            border-radius: 8px;
-            background: #2d333b;
+            width: 42px;
+            height: 42px;
+            border-radius: 14px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03));
             display: flex;
             align-items: center;
             justify-content: center;
@@ -570,23 +831,24 @@
         }
 
         .pm-card-icon img { width: 100%; height: 100%; object-fit: cover; }
-        .pm-card-icon svg { width: 22px; height: 22px; stroke: #6e7681; }
+        .pm-card-icon svg { width: 20px; height: 20px; stroke: #8fa0b6; }
 
         .pm-card-info { flex: 1; min-width: 0; }
 
         .pm-card-title {
             font-size: 13px;
-            font-weight: 600;
+            font-weight: 700;
             color: var(--pm-text-primary);
-            margin-bottom: 2px;
+            margin-bottom: 4px;
             line-height: 1.4;
             padding-right: 60px;
+            letter-spacing: -0.01em;
         }
         
         .pm-card-note {
             font-size: 11px;
             color: var(--pm-text-secondary);
-            margin-bottom: 4px;
+            margin-bottom: 8px;
             display: -webkit-box;
             -webkit-line-clamp: 2;
             -webkit-box-orient: vertical;
@@ -597,25 +859,26 @@
         .pm-card-tags {
             display: flex;
             flex-wrap: wrap;
-            gap: 4px;
-            margin-bottom: 4px;
+            gap: 6px;
+            margin-bottom: 8px;
         }
         
         .pm-card-tag {
             font-size: 10px;
-            padding: 2px 6px;
-            border-radius: 6px;
+            padding: 4px 8px;
+            border-radius: 999px;
             background: rgba(46, 122, 251, 0.1);
             color: var(--pm-accent);
-            font-weight: 500;
+            font-weight: 700;
+            letter-spacing: 0.02em;
         }
 
         .pm-card-meta {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding-top: 6px;
-            border-top: 1px solid rgba(255,255,255,0.05);
+            padding-top: 8px;
+            border-top: 1px solid rgba(255,255,255,0.06);
         }
         
         .pm-prices {
@@ -631,29 +894,30 @@
 
         .pm-card-actions {
             position: absolute;
-            top: 12px;
-            right: 12px;
+            top: 14px;
+            right: 14px;
             z-index: 10;
             display: flex;
-            gap: 4px;
+            gap: 6px;
             opacity: 0;
             transition: opacity 0.2s;
         }
         
         .pm-card:hover .pm-card-actions { opacity: 1; }
+        .pm-card:focus-within .pm-card-actions { opacity: 1; }
 
         .pm-card-btn-small {
-            width: 26px;
-            height: 26px;
+            width: 30px;
+            height: 30px;
             display: flex;
             align-items: center;
             justify-content: center;
             background: rgba(0,0,0,0.4);
-            border: none;
+            border: 1px solid rgba(255,255,255,0.06);
             color: var(--pm-text-primary);
             cursor: pointer;
-            border-radius: 6px;
-            backdrop-filter: blur(4px);
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
         }
 
         .pm-card-btn-small:hover { background: var(--pm-accent); }
@@ -662,19 +926,69 @@
         /* Empty State */
         .pm-empty {
             text-align: center;
-            padding: 60px 20px;
+            padding: 52px 22px;
             color: var(--pm-text-secondary);
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
+            border: 1px dashed rgba(255,255,255,0.08);
+            border-radius: 24px;
+            background:
+                radial-gradient(circle at top, rgba(78, 161, 255, 0.08), transparent 45%),
+                rgba(255,255,255,0.02);
         }
 
         .pm-empty-icon {
             width: 56px;
             height: 56px;
-            opacity: 0.2;
+            opacity: 0.5;
+            color: var(--pm-text-tertiary);
+        }
+
+        .pm-empty-title {
             color: var(--pm-text-primary);
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .pm-empty-subtitle {
+            max-width: 280px;
+            line-height: 1.55;
+            font-size: 13px;
+        }
+
+        .pm-empty-actions {
+            margin-top: 8px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .pm-empty-btn {
+            border: 1px solid var(--pm-border);
+            background: rgba(255,255,255,0.04);
+            color: var(--pm-text-primary);
+            border-radius: 999px;
+            padding: 9px 14px;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .pm-empty-btn:hover {
+            border-color: rgba(78, 161, 255, 0.34);
+            background: rgba(78, 161, 255, 0.12);
+        }
+
+        .pm-card-saved-at {
+            color: var(--pm-text-tertiary);
+            font-size: 10px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
         }
 
         /* Edit Modal */
@@ -802,43 +1116,65 @@
         .pm-panel-content::-webkit-scrollbar-track { background: transparent; }
         .pm-panel-content::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
         .pm-panel-content::-webkit-scrollbar-thumb:hover { background: #58a6ff; }
+
+        @media (max-width: 900px) {
+            #pm-assistant-toolbar {
+                right: 12px;
+                bottom: 12px;
+                gap: 10px;
+            }
+
+            #pm-toast {
+                right: 12px;
+                bottom: 72px;
+                max-width: calc(100vw - 24px);
+            }
+
+            #pm-panel {
+                top: 12px;
+                right: 12px;
+                width: min(420px, calc(100vw - 24px));
+                height: calc(100vh - 24px);
+                max-height: calc(100vh - 24px);
+                border-radius: 24px;
+            }
+
+            .pm-panel-summary {
+                grid-template-columns: 1fr;
+            }
+
+            .pm-btn-action {
+                min-width: 48px;
+                width: 48px;
+                padding: 0;
+            }
+
+            .pm-btn-action span {
+                display: none;
+            }
+        }
     `;
 
     // Inject styles
-    const styleEl = document.createElement('style');
-    styleEl.textContent = styles;
-    document.head.appendChild(styleEl);
-
-    // ==================== DATA ====================
-    let favoriteMarkets = JSON.parse(GM_getValue('pm_fav_markets', '[]'));
-    let favoriteTraders = JSON.parse(GM_getValue('pm_fav_traders', '[]'));
-
-    // Migration: Ensure all items have required fields
-    favoriteMarkets.forEach(m => {
-        if (!m.tags) m.tags = [];
-        if (m.customName === undefined) m.customName = '';
-    });
-    favoriteTraders.forEach(t => {
-        if (!t.tags) t.tags = [];
-        if (t.customName === undefined) t.customName = '';
-    });
-
-    // Save after migration
-    saveMarkets();
-    saveTraders();
-
-    // State
-    let editingItem = null;
-    let activeTab = 'markets';
-    let activeFilterTag = null;
-    let activeSort = 'newest';
+    if (!document.getElementById('pm-favorites-style')) {
+        const styleEl = document.createElement('style');
+        styleEl.id = 'pm-favorites-style';
+        styleEl.textContent = styles;
+        document.head.appendChild(styleEl);
+    }
 
     function saveMarkets() {
-        GM_setValue('pm_fav_markets', JSON.stringify(favoriteMarkets));
+        clearTimeout(saveMarketTimer);
+        saveMarketTimer = setTimeout(() => {
+            GM_setValue('pm_fav_markets', JSON.stringify(favoriteMarkets));
+        }, 80);
     }
 
     function saveTraders() {
-        GM_setValue('pm_fav_traders', JSON.stringify(favoriteTraders));
+        clearTimeout(saveTraderTimer);
+        saveTraderTimer = setTimeout(() => {
+            GM_setValue('pm_fav_traders', JSON.stringify(favoriteTraders));
+        }, 80);
     }
 
     // ==================== EXPORT/IMPORT ====================
@@ -899,7 +1235,7 @@
 
                     saveMarkets();
                     saveTraders();
-                    renderAll();
+                    scheduleRender(true);
                     showToast(t('importSuccess'));
                 } catch (err) {
                     console.error('[PM] Import error:', err);
@@ -916,9 +1252,14 @@
 
     // ==================== INIT ====================
     function init() {
-
         // Global event delegation for edit/delete/save buttons
         document.addEventListener('click', function (e) {
+            const card = e.target.closest('.pm-card[data-url]');
+            if (card && !card.classList.contains('pm-card-editing') && !e.target.closest('.pm-card-btn-small') && !e.target.closest('.pm-inline-input')) {
+                window.open(card.dataset.url, '_blank', 'noopener');
+                return;
+            }
+
             const editBtn = e.target.closest('.pm-edit-btn');
             if (editBtn) {
                 e.stopPropagation();
@@ -966,10 +1307,26 @@
                 window.saveInlineEdit();
                 return;
             }
+
+            const clearFiltersBtn = e.target.closest('.pm-clear-filters-btn');
+            if (clearFiltersBtn) {
+                e.stopPropagation();
+                e.preventDefault();
+                window.pmClearFilters();
+            }
         }, true);
 
         // Global keydown handler for Enter key in inline inputs - CSP compliant
         document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') {
+                const panel = document.getElementById('pm-panel');
+                if (panel && panel.classList.contains('show')) {
+                    panel.classList.remove('show');
+                    const panelBtn = document.getElementById('pm-panel-btn');
+                    if (panelBtn) panelBtn.classList.remove('favorited');
+                    return;
+                }
+            }
             if (e.key === 'Enter') {
                 const input = e.target.closest('.pm-inline-input');
                 if (input) {
@@ -982,9 +1339,12 @@
         }, true);
 
         injectPanel();
-        // injectEditModal(); // Removed - using inline editing
-        checkPageContext();
+        checkPageContext(true);
         observeNavigation();
+        window.addEventListener('resize', debounce(() => {
+            const panel = document.getElementById('pm-panel');
+            if (panel) persistPanelBounds(panel);
+        }, 120));
     }
 
     function isMarketPage() {
@@ -995,11 +1355,28 @@
         return location.pathname.includes('/@') || location.pathname.includes('/profile/');
     }
 
-    function checkPageContext() {
+    function getPageContext() {
+        if (isMarketPage()) return 'market';
+        if (isProfilePage()) return 'profile';
+        return 'global';
+    }
+
+    function checkPageContext(force = false) {
+        const nextContext = getPageContext();
+        const hasToolbar = Boolean(document.getElementById('pm-assistant-toolbar'));
+
+        if (!force && hasToolbar && currentPageContext === nextContext) {
+            if (nextContext === 'market') updateMarketButton();
+            if (nextContext === 'profile') updateTraderButton();
+            return;
+        }
+
+        currentPageContext = nextContext;
         removeToolbar();
-        if (isMarketPage()) {
+
+        if (nextContext === 'market') {
             injectMarketToolbar();
-        } else if (isProfilePage()) {
+        } else if (nextContext === 'profile') {
             injectProfileToolbar();
         } else {
             injectGlobalToolbar();
@@ -1008,12 +1385,37 @@
 
     function observeNavigation() {
         let lastUrl = location.href;
-        new MutationObserver(() => {
+
+        const handleNavigation = debounce(() => {
             if (location.href !== lastUrl) {
                 lastUrl = location.href;
-                setTimeout(checkPageContext, 1000);
+                checkPageContext(true);
             }
-        }).observe(document.body, { childList: true, subtree: true });
+        }, 220);
+
+        if (!window.__pmFavoritesNavHooked) {
+            window.__pmFavoritesNavHooked = true;
+
+            ['pushState', 'replaceState'].forEach(method => {
+                const original = history[method];
+                history[method] = function (...args) {
+                    const result = original.apply(this, args);
+                    handleNavigation();
+                    return result;
+                };
+            });
+
+            window.addEventListener('popstate', handleNavigation);
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) handleNavigation();
+            });
+        }
+
+        clearTimeout(pageContextTimer);
+        pageContextTimer = setTimeout(() => {
+            checkPageContext(true);
+            scheduleRender(true);
+        }, 300);
     }
 
     function removeToolbar() {
@@ -1078,6 +1480,30 @@
         return toolbar;
     }
 
+    function updateSummaryCards() {
+        const marketSummary = document.getElementById('pm-summary-market');
+        const traderSummary = document.getElementById('pm-summary-trader');
+        const savedAtSummary = document.getElementById('pm-summary-recent');
+
+        if (marketSummary) marketSummary.textContent = String(favoriteMarkets.length);
+        if (traderSummary) traderSummary.textContent = String(favoriteTraders.length);
+
+        const recentTimestamp = [...favoriteMarkets, ...favoriteTraders]
+            .map(item => item.savedAt || 0)
+            .sort((a, b) => b - a)[0];
+
+        if (savedAtSummary) {
+            if (!recentTimestamp) {
+                savedAtSummary.textContent = '--';
+            } else {
+                savedAtSummary.textContent = new Date(recentTimestamp).toLocaleDateString(currentLang === 'zh' ? 'zh-CN' : 'en-US', {
+                    month: 'short',
+                    day: 'numeric'
+                });
+            }
+        }
+    }
+
     // ==================== PANEL ====================
     function injectPanel() {
         if (document.getElementById('pm-panel')) return;
@@ -1086,7 +1512,15 @@
         panel.innerHTML = `
             <div class="pm-panel-header">
                 <div class="pm-panel-title">
-                    <span>${t('favorites')}</span>
+                    <div class="pm-logo-icon">
+                        <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
+                        </svg>
+                    </div>
+                    <div class="pm-panel-title-copy">
+                        <span>${t('favorites')}</span>
+                        <small>${t('panelSubtitle')}</small>
+                    </div>
                 </div>
                 <div class="pm-header-actions">
                     <button class="pm-header-btn" id="pm-export-btn" title="${t('exportData')}">
@@ -1107,6 +1541,21 @@
                     </button>
                 </div>
             </div>
+
+            <div class="pm-panel-summary">
+                <div class="pm-summary-card">
+                    <strong id="pm-summary-market">0</strong>
+                    <span>${t('markets')}</span>
+                </div>
+                <div class="pm-summary-card">
+                    <strong id="pm-summary-trader">0</strong>
+                    <span>${t('traders')}</span>
+                </div>
+                <div class="pm-summary-card">
+                    <strong id="pm-summary-recent">--</strong>
+                    <span>${t('recentSaved')}</span>
+                </div>
+            </div>
             
             <div class="pm-panel-tabs">
                 <button class="pm-panel-tab active" data-tab="markets">
@@ -1118,8 +1567,11 @@
             </div>
             
             <div class="pm-panel-filters">
-                <div style="margin-bottom: 12px;">
-                    <input type="text" id="pm-search-input" placeholder="${t('searchPlaceholder')}" style="width: 100%; padding: 8px 12px; background: rgba(13, 17, 23, 0.6); border: 1px solid var(--pm-border); border-radius: 6px; color: var(--pm-text-primary); font-size: 13px; outline: none;" />
+                <div class="pm-search-shell">
+                    <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-4.35-4.35m0 0A7.5 7.5 0 1 0 6.5 6.5a7.5 7.5 0 0 0 10.15 10.15Z" />
+                    </svg>
+                    <input type="text" id="pm-search-input" class="pm-search-input" placeholder="${t('searchPlaceholder')}" />
                 </div>
                 <div class="pm-sort-row">
                     <div class="pm-tag-filters" id="pm-tag-filters"></div>
@@ -1145,7 +1597,6 @@
         document.getElementById('pm-import-btn').onclick = importData;
 
         // Search functionality
-        let searchQuery = '';
         const searchInput = document.getElementById('pm-search-input');
         if (searchInput) {
             // Inject Resize Handles - Left edge (width), Top edge (height), Top-left corner (both)
@@ -1215,27 +1666,18 @@
             resizeNW.addEventListener('mousedown', initResize);
 
             // Restore saved size and position
-            const savedWidth = GM_getValue('pm_panel_width', 400);
-            const savedHeight = GM_getValue('pm_panel_height', window.innerHeight - 120);
-            const savedTop = GM_getValue('pm_panel_top', 70);
-
-            panel.style.width = savedWidth + 'px';
-            panel.style.height = savedHeight + 'px';
-            panel.style.top = savedTop + 'px';
-            searchInput.oninput = (e) => {
-                searchQuery = e.target.value.toLowerCase();
-                renderAll();
-            };
-            // Make searchQuery accessible to getProcessedList
+            panel.style.width = savedPanelWidth + 'px';
+            panel.style.height = savedPanelHeight + 'px';
+            if (savedPanelTop) panel.style.top = savedPanelTop + 'px';
             window.pmSearchQuery = '';
-            searchInput.oninput = (e) => {
+            searchInput.addEventListener('input', (e) => {
                 window.pmSearchQuery = e.target.value.toLowerCase();
-                renderAll();
-            };
+                scheduleRender(true);
+            });
         }
         document.getElementById('pm-sort-select').onchange = (e) => {
             activeSort = e.target.value;
-            renderAll();
+            scheduleRender(true);
         };
 
         panel.querySelectorAll('.pm-panel-tab').forEach(tab => {
@@ -1246,18 +1688,27 @@
                 document.getElementById('pm-tab-' + tab.dataset.tab).classList.add('active');
                 activeTab = tab.dataset.tab;
                 activeFilterTag = null;
-                renderAll();
+                scheduleRender(true);
             };
         });
 
-        renderAll();
+        persistPanelBounds(panel);
+        scheduleRender(true);
     }
 
     function togglePanel() {
         const panel = document.getElementById('pm-panel');
+        const panelBtn = document.getElementById('pm-panel-btn');
+        if (!panel) return;
         panel.classList.toggle('show');
+        if (panelBtn) panelBtn.classList.toggle('favorited', panel.classList.contains('show'));
         if (panel.classList.contains('show')) {
-            renderAll();
+            persistPanelBounds(panel);
+            scheduleRender(true);
+            setTimeout(() => {
+                const searchInput = document.getElementById('pm-search-input');
+                if (searchInput) searchInput.focus();
+            }, 40);
         }
     }
 
@@ -1332,7 +1783,7 @@
             doSaveInlineEdit();
         }
         currentlyEditing = { type, idx };
-        renderAll();
+        scheduleRender(true);
         // Focus the name input after render
         setTimeout(() => {
             const input = document.getElementById(`pm-inline-name-${type}-${idx}`);
@@ -1372,11 +1823,11 @@
 
         console.log('[PM] Saved:', item.customName, item.tags);
 
-        // Save to GM storage
+        // Save to STORAGE
         if (type === 'market') {
-            GM_setValue('pm_fav_markets', JSON.stringify(favoriteMarkets));
+            saveMarkets();
         } else {
-            GM_setValue('pm_fav_traders', JSON.stringify(favoriteTraders));
+            saveTraders();
         }
 
         return true;
@@ -1389,7 +1840,7 @@
         saveTimeout = setTimeout(() => {
             if (doSaveInlineEdit()) {
                 currentlyEditing = null;
-                renderAll();
+                scheduleRender(true);
                 showToast(t('saved'));
             }
         }, 100);
@@ -1403,8 +1854,8 @@
 
     function renderAll() {
         renderFilters();
-        // Always update both counts regardless of active tab
         updateBadgeCounts();
+        updateSummaryCards();
         if (activeTab === 'markets') renderMarkets();
         else renderTraders();
     }
@@ -1429,14 +1880,14 @@
         });
 
         if (allTags.size === 0) {
-            container.innerHTML = `<span style="font-size:11px;color:#8b949e">${t('noTags')}</span>`;
+            container.innerHTML = `<span style="font-size:11px;color:#8b949e">${escapeHtml(t('noTags'))}</span>`;
             activeFilterTag = null;
             return;
         }
 
-        let html = `<div class="pm-filter-tag ${!activeFilterTag ? 'active' : ''}" data-tag="" >${t('all')}</div>`;
+        let html = `<div class="pm-filter-tag ${!activeFilterTag ? 'active' : ''}" data-tag="" >${escapeHtml(t('all'))}</div>`;
         Array.from(allTags).sort().forEach(tag => {
-            html += `<div class="pm-filter-tag ${activeFilterTag === tag ? 'active' : ''}" data-tag="${tag}">${tag}</div>`;
+            html += `<div class="pm-filter-tag ${activeFilterTag === tag ? 'active' : ''}" data-tag="${escapeAttr(tag)}">${escapeHtml(tag)}</div>`;
         });
         container.innerHTML = html;
 
@@ -1451,7 +1902,18 @@
 
     window.pmFilter = function (tag) {
         activeFilterTag = tag;
-        renderAll();
+        scheduleRender(true);
+    };
+
+    window.pmClearFilters = function () {
+        activeFilterTag = null;
+        activeSort = 'newest';
+        window.pmSearchQuery = '';
+        const searchInput = document.getElementById('pm-search-input');
+        const sortSelect = document.getElementById('pm-sort-select');
+        if (searchInput) searchInput.value = '';
+        if (sortSelect) sortSelect.value = 'newest';
+        scheduleRender(true);
     };
 
     function getProcessedList(list) {
@@ -1496,12 +1958,17 @@
         const displayList = getProcessedList(favoriteMarkets);
 
         if (displayList.length === 0) {
+            const isFiltered = Boolean((window.pmSearchQuery || '').trim() || activeFilterTag);
             container.innerHTML = `
                 <div class="pm-empty">
                     <svg class="pm-empty-icon" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75z" />
                     </svg>
-                    <p>${t('noMarkets')}</p>
+                    <div class="pm-empty-title">${escapeHtml(isFiltered ? t('noSearchResults') : t('noMarkets'))}</div>
+                    <div class="pm-empty-subtitle">${escapeHtml(isFiltered ? t('clearFilters') : t('noMarketsHint'))}</div>
+                    <div class="pm-empty-actions">
+                        <button class="pm-empty-btn pm-clear-filters-btn">${escapeHtml(t('clearFilters'))}</button>
+                    </div>
                 </div>`;
             return;
         }
@@ -1512,7 +1979,7 @@
             if (isEditing) {
                 // INLINE EDIT MODE
                 return `
-            <div class="pm-card pm-card-editing" onclick="event.stopPropagation()">
+            <div class="pm-card pm-card-editing">
                 <div class="pm-card-inner">
                     <div class="pm-card-icon">
                         ${m.icon ? `<img src="${m.icon}" alt="Market">` : `<svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -1547,27 +2014,28 @@
             const showOriginal = m.customName && m.customName.trim() && m.title;
             const tagsHtml = (m.tags || []).map(t => {
                 const color = getTagColor(t);
-                return `<span class="pm-card-tag" style="background: ${color}; color: white; border: none; padding: 3px 8px; border-radius: 4px; font-size: 11px;">${t}</span>`;
+                return `<span class="pm-card-tag" style="background: ${color}; color: white; border: none; padding: 3px 8px; border-radius: 4px; font-size: 11px;">${escapeHtml(t)}</span>`;
             }).join('');
 
             return `
-            <div class="pm-card" onclick="window.open('${m.url}', '_blank')">
+            <div class="pm-card" data-url="${escapeAttr(m.url)}">
                 <div class="pm-card-inner">
                     <div class="pm-card-icon">
-                        ${m.icon ? `<img src="${m.icon}" onerror="this.style.display='none'">` :
+                        ${m.icon ? `<img src="${escapeAttr(m.icon)}" onerror="this.style.display='none'">` :
                     `<svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75z" />
                         </svg>`}
                     </div>
                     <div class="pm-card-info">
-                        <div class="pm-card-title">${displayName}</div>
-                        ${showOriginal ? `<div class="pm-card-note">${m.title}</div>` : ''}
+                        <div class="pm-card-title">${escapeHtml(displayName)}</div>
+                        ${showOriginal ? `<div class="pm-card-note">${escapeHtml(m.title)}</div>` : ''}
                         ${tagsHtml ? `<div class="pm-card-tags">${tagsHtml}</div>` : ''}
                         <div class="pm-card-meta">
                             <div class="pm-prices">
-                                <span class="pm-price-yes">Yes: ${m.yesPrice}¢</span>
-                                <span class="pm-price-no">No: ${m.noPrice}¢</span>
+                                <span class="pm-price-yes">Yes: ${escapeHtml(m.yesPrice)}¢</span>
+                                <span class="pm-price-no">No: ${escapeHtml(m.noPrice)}¢</span>
                             </div>
+                            <span class="pm-card-saved-at">${escapeHtml(new Date(m.savedAt || Date.now()).toLocaleDateString(currentLang === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric' }))}</span>
                         </div>
                     </div>
                 </div>
@@ -1585,20 +2053,6 @@
                 </div>
             </div>`;
         }).join('');
-    }
-
-    function extractPageLogo() {
-        // Try Market Icon
-        const marketIcon = document.querySelector('img[alt="Market icon"]');
-        if (marketIcon && marketIcon.src) return marketIcon.src;
-
-        // Try Trader Avatar (generic rounded-full check)
-        const avatars = Array.from(document.querySelectorAll('img')).filter(img =>
-            img.src.includes('profile-image') ||
-            (img.className.includes('rounded-full') && img.width > 30) // lowered threshold
-        );
-        if (avatars.length > 0) return avatars[0].src;
-        return null;
     }
 
     function extractMarketData() {
@@ -1631,7 +2085,7 @@
         }
         saveMarkets();
         updateMarketButton();
-        renderAll();
+        scheduleRender(true);
     }
 
     function updateMarketButton() {
@@ -1648,7 +2102,7 @@
         if (idx === -1) return; // Already deleted
         favoriteMarkets.splice(idx, 1);
         saveMarkets();
-        renderAll();
+        scheduleRender(true);
         updateMarketButton();
     };
 
@@ -1662,12 +2116,17 @@
         const displayList = getProcessedList(favoriteTraders);
 
         if (displayList.length === 0) {
+            const isFiltered = Boolean((window.pmSearchQuery || '').trim() || activeFilterTag);
             container.innerHTML = `
                 <div class="pm-empty">
                     <svg class="pm-empty-icon" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
                     </svg>
-                    <p>${t('noTraders')}</p>
+                    <div class="pm-empty-title">${escapeHtml(isFiltered ? t('noSearchResults') : t('noTraders'))}</div>
+                    <div class="pm-empty-subtitle">${escapeHtml(isFiltered ? t('clearFilters') : t('noTradersHint'))}</div>
+                    <div class="pm-empty-actions">
+                        <button class="pm-empty-btn pm-clear-filters-btn">${escapeHtml(t('clearFilters'))}</button>
+                    </div>
                 </div>`;
             return;
         }
@@ -1677,7 +2136,7 @@
 
             if (isEditing) {
                 return `
-            <div class="pm-card pm-card-editing" onclick="event.stopPropagation()">
+            <div class="pm-card pm-card-editing">
                 <div class="pm-card-inner">
                     <div class="pm-card-icon" style="background: linear-gradient(135deg, #667eea, #764ba2); color: white; font-size: 18px; font-weight: 700;">
                         ${(trader.username || trader.id || '?')[0].toUpperCase()}
@@ -1713,11 +2172,11 @@
             const showOriginal = trader.customName && trader.customName.trim() && (trader.username || trader.id);
             const tagsHtml = (trader.tags || []).map(tag => {
                 const color = getTagColor(tag);
-                return `<span class="pm-card-tag" style="background: ${color}; color: white; border: none; padding: 3px 8px; border-radius: 4px; font-size: 11px;">${tag}</span>`;
+                return `<span class="pm-card-tag" style="background: ${color}; color: white; border: none; padding: 3px 8px; border-radius: 4px; font-size: 11px;">${escapeHtml(tag)}</span>`;
             }).join('');
 
             return `
-            <div class="pm-card" onclick="window.open('${profileUrl}', '_blank')">
+            <div class="pm-card" data-url="${escapeAttr(profileUrl)}">
                 <div class="pm-card-inner">
                     <div class="pm-card-icon pm-trader-avatar">
                         <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -1725,13 +2184,14 @@
                         </svg>
                     </div>
                     <div class="pm-card-info">
-                        <div class="pm-card-title">${displayName}</div>
-                        ${showOriginal ? `<div class="pm-card-note">${trader.username || trader.id}</div>` : ''}
+                        <div class="pm-card-title">${escapeHtml(displayName)}</div>
+                        ${showOriginal ? `<div class="pm-card-note">${escapeHtml(trader.username || trader.id)}</div>` : ''}
                         ${tagsHtml ? `<div class="pm-card-tags">${tagsHtml}</div>` : ''}
                         <div class="pm-card-meta">
                             <span style="font-size:11px;color:#8b949e">
-                                ${trader.address ? `${trader.address.slice(0, 6)}...${trader.address.slice(-4)}` : 'Trader'}
+                                ${escapeHtml(trader.address ? `${trader.address.slice(0, 6)}...${trader.address.slice(-4)}` : 'Trader')}
                             </span>
+                            <span class="pm-card-saved-at">${escapeHtml(new Date(trader.savedAt || Date.now()).toLocaleDateString(currentLang === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric' }))}</span>
                         </div>
                     </div>
                 </div>
@@ -1788,7 +2248,7 @@
         }
         saveTraders();
         updateTraderButton();
-        renderAll();
+        scheduleRender(true);
     }
 
     function updateTraderButton() {
@@ -1805,7 +2265,7 @@
         if (idx === -1) return;
         favoriteTraders.splice(idx, 1);
         saveTraders();
-        renderAll();
+        scheduleRender(true);
         updateTraderButton();
     };
 
@@ -1829,20 +2289,17 @@
     function showToast(msg) {
         let toast = document.getElementById('pm-toast');
         if (toast) toast.remove();
+        if (toastTimer) clearTimeout(toastTimer);
         toast = document.createElement('div');
         toast.id = 'pm-toast';
         toast.textContent = msg;
         document.body.appendChild(toast);
         setTimeout(() => toast.classList.add('show'), 10);
-        setTimeout(() => {
+        toastTimer = setTimeout(() => {
             toast.classList.remove('show');
             setTimeout(() => toast.remove(), 300);
         }, 2000);
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
-        init();
-    }
+    queueInit();
 })();
